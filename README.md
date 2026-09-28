@@ -115,9 +115,11 @@ output go to stderr. Callers branch on the exit code, never on stderr wording.
 
 ## Opening the browser
 
-`$GOPEN_BROWSER <url>` when set; otherwise `open` on macOS or `xdg-open`
-elsewhere; then `$BROWSER <url>`. The variable names one executable, not a
-command line. Tests set it to a recording stub.
+`$GOPEN_BROWSER <url>` when set, else `$BROWSER <url>`, else `open` on macOS
+or `xdg-open` elsewhere. `$BROWSER` outranks the platform opener because a
+session that sets it means it: over SSH the office mini sets `browser-clip`,
+which sends the URL to the laptop, where `open` would draw on the mini's
+screen. Each variable names one executable, not a command line. Tests set `GOPEN_BROWSER` to a recording stub.
 
 ## Integration boundaries
 
@@ -134,10 +136,11 @@ command line. Tests set it to a recording stub.
 `git push` runs as a plain subprocess, so shell functions that wrap `git`
 (such as a `--no-verify` wrapper) do not apply to it. A repository that needs
 push flags carries them in git config instead: every value of the multi-valued
-`gopen.pushArgs` is one argument inserted after `push`, and gopen names them on
-stderr before pushing. Dotfiles sets `gopen.pushArgs = --no-verify` for the
-planlab clone and its worktrees (`~/.config/git/planlab.gitconfig`, included by
-`gitdir`), matching the zsh `git()` wrapper there.
+`repo.pushArgs` is one argument inserted after `push`, and gopen names them on
+stderr before pushing. The key is shared: the dotfiles zsh `git()` wrapper
+reads it too, so git config is the only place a repository's push policy
+lives. Dotfiles sets `repo.pushArgs = --no-verify` for the planlab clone and
+its worktrees (`~/.config/git/planlab.gitconfig`, included by `gitdir`).
 
 ## Development
 

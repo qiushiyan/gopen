@@ -48,7 +48,7 @@ exist in the working tree.
 Options:
   -n, --print    print the URL without opening a browser; never pushes
   -y, --yes      push a branch that is not on origin (git push -u origin;
-                 git config gopen.pushArgs adds flags, one per value)
+                 git config repo.pushArgs adds flags, one per value)
                  without asking, then open the PR-create page, or the path
                  on the branch
       --tree     the branch's tree even when an open PR exists
@@ -62,8 +62,8 @@ A branch not on origin: with a terminal on stdin (and no --print or -y),
 gopen asks before pushing, and declining opens the repository's home page.
 Without a terminal, or with --print, it opens nothing and exits 3.
 
-Browser: $GOPEN_BROWSER <url> when set; otherwise open (macOS) or xdg-open,
-then $BROWSER <url>.
+Browser: $GOPEN_BROWSER <url> when set, else $BROWSER <url> (the office mini
+sets browser-clip over SSH), else open (macOS) or xdg-open.
 
 Exit codes:
   0  the URL was opened or printed
@@ -204,22 +204,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 	return exitOK
 }
 
-// openBrowser hands url to $GOPEN_BROWSER, else the platform opener, else
-// $BROWSER. The opener's output goes to stderr so stdout stays the URL.
+// openBrowser hands url to $GOPEN_BROWSER, else $BROWSER, else the platform
+// opener. $BROWSER outranks the platform because a session that sets it means
+// it: over SSH the office mini sets browser-clip, which sends the URL to the
+// laptop, where `open` would draw on the mini's own screen. The opener's
+// output goes to stderr so stdout stays the URL.
 func openBrowser(url string, stderr io.Writer) error {
 	name, quiet := os.Getenv("GOPEN_BROWSER"), false
+	if name == "" {
+		name = os.Getenv("BROWSER")
+	}
 	if name == "" {
 		opener := "xdg-open"
 		if runtime.GOOS == "darwin" {
 			opener = "open"
 		}
-		if p, err := exec.LookPath(opener); err == nil {
-			name, quiet = p, opener == "xdg-open" // xdg-open relays browser chatter
-		} else if b := os.Getenv("BROWSER"); b != "" {
-			name = b
-		} else {
+		p, err := exec.LookPath(opener)
+		if err != nil {
 			return errors.New("no browser opener found")
 		}
+		name, quiet = p, opener == "xdg-open" // xdg-open relays browser chatter
 	}
 	cmd := exec.Command(name, url)
 	if !quiet {
