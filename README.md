@@ -132,7 +132,12 @@ command line. Tests set it to a recording stub.
   stdout.
 
 `git push` runs as a plain subprocess, so shell functions that wrap `git`
-(such as a `--no-verify` wrapper) do not apply to it.
+(such as a `--no-verify` wrapper) do not apply to it. A repository that needs
+push flags carries them in git config instead: every value of the multi-valued
+`gopen.pushArgs` is one argument inserted after `push`, and gopen names them on
+stderr before pushing. Dotfiles sets `gopen.pushArgs = --no-verify` for the
+planlab clone and its worktrees (`~/.config/git/planlab.gitconfig`, included by
+`gitdir`), matching the zsh `git()` wrapper there.
 
 ## Development
 

@@ -385,6 +385,26 @@ func TestYesPushesWithoutTerminal(t *testing.T) {
 	f.git(f.repo, "switch", "-qc", "feat/other")
 	f.expect(0, base+"/blob/feat/other/README.md?plain=1#L1", "-y", "README.md:1")
 
+	// gopen.pushArgs carries a repository's push flags: with --no-verify a
+	// failing pre-push hook is skipped; without it the hook still runs.
+	hooks := filepath.Join(f.home, "hooks")
+	if err := os.MkdirAll(hooks, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	f.git(f.repo, "config", "core.hooksPath", hooks)
+	f.git(f.repo, "switch", "-qc", "feat/hooked")
+	f.expect(1, "", "-y")
+	f.git(f.repo, "config", "--add", "gopen.pushArgs", "--no-verify")
+	f.expect(0, base+"/compare/feat/hooked?expand=1", "-y")
+	if !strings.Contains(f.stderr.String(), "git push --no-verify (gopen.pushArgs)") {
+		t.Fatalf("stderr: %q", f.stderr.String())
+	}
+	f.git(f.repo, "config", "--unset-all", "gopen.pushArgs")
+	f.git(f.repo, "config", "--unset", "core.hooksPath")
+
 	// A failed push exits 1 with nothing on stdout.
 	f.git(f.repo, "switch", "-qc", "feat/broken")
 	f.git(f.repo, "config", "remote.origin.pushurl", filepath.Join(f.home, "missing.git"))

@@ -47,7 +47,8 @@ exist in the working tree.
 
 Options:
   -n, --print    print the URL without opening a browser; never pushes
-  -y, --yes      push a branch that is not on origin (git push -u origin)
+  -y, --yes      push a branch that is not on origin (git push -u origin;
+                 git config gopen.pushArgs adds flags, one per value)
                  without asking, then open the PR-create page, or the path
                  on the branch
       --tree     the branch's tree even when an open PR exists

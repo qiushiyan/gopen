@@ -259,12 +259,23 @@ func (r *Repo) CompareURL(branch string) string {
 	return r.Base + "/compare/" + escapePath(branch) + "?expand=1"
 }
 
-// Push runs `git push -u origin <branch>` with its output on w.
+// Push runs `git push [gopen.pushArgs…] -u origin <branch>` with its output on
+// w. gopen.pushArgs is a multi-valued git config key, one argument per value,
+// so a repository can carry its own push flags: dotfiles sets --no-verify for
+// planlab, whose pre-push hook is only the git-lfs upload, exactly as its zsh
+// git() wrapper does for pushes typed in a shell.
 func (r *Repo) Push(ctx context.Context, branch string, stdin io.Reader, w io.Writer) error {
-	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
+	args := []string{"push"}
+	if extra, err := git(ctx, r.Dir, "config", "--get-all", "gopen.pushArgs"); err == nil && extra != "" {
+		flags := strings.Split(extra, "\n")
+		fmt.Fprintf(w, "gopen: git push %s (gopen.pushArgs)\n", strings.Join(flags, " "))
+		args = append(args, flags...)
+	}
+	args = append(args, "-u", "origin", branch)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = r.Dir, stdin, w, w
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git push -u origin %s: %w", branch, err)
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
 }
