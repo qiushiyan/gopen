@@ -1,8 +1,10 @@
 # Working on gopen
 
 Personal CLI that opens the current checkout on GitHub. The README owns the
-design and the output contract. Keep changes proportional to demonstrated
-failures or requested features, and the code free of third-party dependencies.
+design, the output contract, and the split between `cmd/gopen` and
+`internal/resolve`; read it before changing behaviour. Keep changes
+proportional to demonstrated failures or requested features, and the code free
+of third-party dependencies.
 
 - Contract changes cross repos: stdout (one URL), the exit codes, and the flags
   are consumed by `~/dotfiles/tmux/.config/tmux/scripts/tmux-gopen.sh`
@@ -14,8 +16,13 @@ failures or requested features, and the code free of third-party dependencies.
   `gh`, open a browser, or reach the network; isolate tmux checks on a private
   socket (`tmux -L <name>`).
 - Consumers call `gopen` through PATH. `make install` installs it in
-  `~/.local/bin`. Run `make check` before shipping; source edits alone leave
-  callers on the old binary.
+  `~/.local/bin`. Before shipping, run `make check` and confirm
+  `go fix -diff ./...` prints nothing (the module is on Go 1.27); source edits
+  alone leave callers on the old binary.
 - Model-facing help, results, or errors: follow
   `~/dotfiles/claude/.claude/skills/prompt-engineering/SKILL.md`.
 - Library/CLI documentation questions: follow `~/.agents/skills/find-docs/SKILL.md`.
+
+## Conventions
+
+Personal project: commit on the current branch, and push at milestones.
