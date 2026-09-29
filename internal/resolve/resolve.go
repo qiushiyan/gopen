@@ -321,11 +321,10 @@ func (r *Repo) Locate(ctx context.Context, arg string) (*File, error) {
 // SplitLines separates a trailing :N or :N-M line suffix from a path argument.
 // A suffix that is not a line spec stays part of the path.
 func SplitLines(arg string) (path string, start, end int, err error) {
-	i := strings.LastIndexByte(arg, ':')
-	if i < 0 || !isLineSpec(arg[i+1:]) {
+	path, spec, ok := strings.CutLast(arg, ":")
+	if !ok || !isLineSpec(spec) {
 		return arg, 0, 0, nil
 	}
-	path, spec := arg[:i], arg[i+1:]
 	a, b, isRange := strings.Cut(spec, "-")
 	start, _ = strconv.Atoi(a)
 	end = start

@@ -8,7 +8,7 @@ gopen owns only the choice of URL.
 
 ## Install and use
 
-Requires Go 1.25+ and Git; `gh` (authenticated) enables the PR lookup.
+Requires Go 1.27+ and Git; `gh` (authenticated) enables the PR lookup.
 
 ```sh
 make check
