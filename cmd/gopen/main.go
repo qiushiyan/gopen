@@ -62,8 +62,9 @@ A branch not on origin: with a terminal on stdin (and no --print or -y),
 gopen asks before pushing, and declining opens the repository's home page.
 Without a terminal, or with --print, it opens nothing and exits 3.
 
-Browser: $GOPEN_BROWSER <url> when set, else $BROWSER <url> (the office mini
-sets browser-clip over SSH), else open (macOS) or xdg-open.
+Browser: $GOPEN_BROWSER <url> when set, else $BROWSER <url>, else open
+(macOS) or xdg-open. On the office mini $BROWSER is browser-clip: over ssh
+the URL goes to the laptop's clipboard, not a browser.
 
 Exit codes:
   0  the URL was opened or printed
@@ -206,9 +207,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 
 // openBrowser hands url to $GOPEN_BROWSER, else $BROWSER, else the platform
 // opener. $BROWSER outranks the platform because a session that sets it means
-// it: over SSH the office mini sets browser-clip, which sends the URL to the
-// laptop, where `open` would draw on the mini's own screen. The opener's
-// output goes to stderr so stdout stays the URL.
+// it: the office mini sets browser-clip, which sends the URL to the laptop
+// when you are there over ssh, where `open` would draw on the mini's own
+// screen. The opener's output goes to stderr so stdout stays the URL.
 func openBrowser(url string, stderr io.Writer) error {
 	name, quiet := os.Getenv("GOPEN_BROWSER"), false
 	if name == "" {

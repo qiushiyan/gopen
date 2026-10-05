@@ -117,9 +117,10 @@ output go to stderr. Callers branch on the exit code, never on stderr wording.
 
 `$GOPEN_BROWSER <url>` when set, else `$BROWSER <url>`, else `open` on macOS
 or `xdg-open` elsewhere. `$BROWSER` outranks the platform opener because a
-session that sets it means it: over SSH the office mini sets `browser-clip`,
-which sends the URL to the laptop, where `open` would draw on the mini's
-screen. Each variable names one executable, not a command line. Tests set `GOPEN_BROWSER` to a recording stub.
+session that sets it means it: the office mini sets `browser-clip`, which
+sends the URL to the laptop when you are there over ssh, where `open` would
+draw on the mini's own screen. Each variable names one executable, not a
+command line. Tests set `GOPEN_BROWSER` to a recording stub.
 
 ## Integration boundaries
 

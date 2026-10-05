@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// $BROWSER outranks the platform opener: over SSH the office mini sets it to
-// browser-clip so a URL reaches the laptop, while `open` would draw on the
-// mini's own screen. $GOPEN_BROWSER outranks both.
+// $BROWSER outranks the platform opener: the office mini sets it to
+// browser-clip so a URL reaches the laptop over ssh, while `open` would draw
+// on the mini's own screen. $GOPEN_BROWSER outranks both.
 func TestBrowserPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "opened")
