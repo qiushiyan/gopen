@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -282,12 +283,24 @@ func TestPRCache(t *testing.T) {
 		t.Fatalf("--refresh: %d calls", n)
 	}
 
-	// Pushing moves the key, so the next call re-checks at once. (The TTL
-	// and the stored format, which the zsh function also wrote, are
-	// TestCacheHit's.)
+	// Pushing moves the key, so the next call re-checks at once.
 	f.setPR(base + "/pull/10")
 	f.git(f.repo, "push", "-q")
 	f.expect(0, base+"/pull/10")
+
+	// Entries another writer left in epoch seconds, as the zsh function wrote
+	// them: a fresh one is served, an hour-old one is not. This pins the clock
+	// on both sides; the exact TTL boundary and the parse are TestCacheHit's.
+	tip := f.git(f.repo, "rev-parse", "refs/remotes/origin/feat/search")
+	f.setPR(base + "/pull/11")
+	for _, age := range []time.Duration{0, time.Hour} {
+		f.git(f.repo, "config", "branch.feat/search.gopen-pr", fmt.Sprintf("%s %d %s/pull/1", tip, time.Now().Add(-age).Unix(), base))
+		want := base + "/pull/1"
+		if age > 0 {
+			want = base + "/pull/11"
+		}
+		f.expect(0, want)
+	}
 }
 
 func TestPRLookupFailureFallsBackUncached(t *testing.T) {
@@ -359,11 +372,20 @@ func TestNotOnOrigin(t *testing.T) {
 
 	// No terminal: exit 3, nothing printed, opened, or pushed. --print and -y
 	// together still never push.
-	for _, args := range [][]string{nil, {"--print"}, {"-n", "-y"}} {
-		f.expect(3, "", args...)
-		// The refusal names the branch and the way out.
-		if s := f.stderr.String(); !strings.Contains(s, "feat/local") || !strings.Contains(s, "gopen -y") {
-			t.Fatalf("stderr: %q", s)
+	// The refusal names the ref it looked for and a next step that works in
+	// the caller's mode: --print never pushes, so it must not offer -y.
+	for _, c := range []struct {
+		args      []string
+		next, not string
+	}{
+		{nil, "gopen -y", ""},
+		{[]string{"--print"}, "git push -u origin feat/local", "gopen -y"},
+		{[]string{"-n", "-y"}, "git push -u origin feat/local", "gopen -y"},
+	} {
+		f.expect(3, "", c.args...)
+		s := f.stderr.String()
+		if !strings.Contains(s, "origin/feat/local") || !strings.Contains(s, c.next) || (c.not != "" && strings.Contains(s, c.not)) {
+			t.Fatalf("gopen %v: stderr %q", c.args, s)
 		}
 	}
 	if f.lines("browser.log") != nil || f.lines("gh.log") != nil || onOrigin() {
@@ -442,7 +464,7 @@ func TestPathAndLine(t *testing.T) {
 	f := setup(t)
 	f.pushed("feat/search")
 	f.setPR(base + "/pull/7")
-	f.expect(0, base+"/blob/feat/search/src/app/main.go#L42", "-n", "src/app/main.go:42")
+	f.expect(0, base+"/blob/feat/search/src/app/main.go#L3-L9", "-n", "src/app/main.go:3-9")
 	f.expect(0, base+"/tree/feat/search/src", "-n", "src")
 	f.expect(0, base+"/tree/feat/search", "-n", ".")
 	f.expect(0, base+"/blob/feat/search/src/app/main.go#L1", "-n", filepath.Join(f.repo, "src/app/main.go:1"))

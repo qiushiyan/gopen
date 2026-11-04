@@ -34,11 +34,12 @@ Resolution, from the HEAD of the current directory's checkout:
   branch on origin       the branch's tree        /tree/<branch>
   branch not on origin   exit 3, or push and open the PR-create page (-y)
 
-"On origin" is decided from local refs: origin/<branch>, then the branch's
-upstream. Only the PR lookup uses the network. Its answer is cached per branch
-in git config (branch.<name>.gopen-pr) for 10 minutes, keyed on the pushed
-tip, so a new push re-checks at once; --refresh re-checks now. A failed lookup
-warns, is not cached, and falls back to the branch's tree.
+"On origin" means the local ref origin/<branch> exists, the ref git push
+creates; the branch's upstream does not count. Only the PR lookup uses the
+network. Its answer is cached per branch in git config (branch.<name>.gopen-pr)
+for 10 minutes, keyed on the pushed tip, so a new push re-checks at once;
+--refresh re-checks now. A failed lookup warns, is not cached, and falls back
+to the branch's tree.
 
 A path opens that file or directory on the branch (or detached commit) instead
 of the PR: /blob/<ref>/<path>, plus #L<n> or #L<n>-L<m> for a :n or :n-m
@@ -163,7 +164,12 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 	url := t.URL
 	if t.Unpushed {
 		if o.print || (!o.yes && !interactive) {
-			return fail(exitUnpushed, "'%s' is not on origin; nothing on GitHub to open (gopen -y pushes it and opens the PR-create page)", t.Branch)
+			// The way out must work in this mode: under --print, -y never pushes.
+			next := "gopen -y pushes it and opens the PR-create page"
+			if o.print {
+				next = "--print never pushes: git push -u origin " + t.Branch + ", then rerun"
+			}
+			return fail(exitUnpushed, "'%s' is not on origin (no origin/%s), so GitHub has nothing to open; %s", t.Branch, t.Branch, next)
 		}
 		if o.yes || askPush(stdin, stderr, t.Branch) {
 			if err := repo.Push(ctx, t.Branch, stdin, stderr); err != nil {
