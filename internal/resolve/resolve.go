@@ -21,10 +21,10 @@ import (
 	"time"
 )
 
-// CacheTTL bounds how long a cached PR answer is served. A PR closed, merged,
+// cacheTTL bounds how long a cached PR answer is served. A PR closed, merged,
 // or opened on an unchanged tip changes nothing in Git, so the pushed sha alone
 // can never notice it; the TTL bounds how stale such an answer can get.
-const CacheTTL = 600 * time.Second
+const cacheTTL = 600 * time.Second
 
 // DefaultPRTimeout bounds the gh lookup in repositories returned by Open.
 var DefaultPRTimeout = 10 * time.Second
@@ -197,14 +197,14 @@ func (r *Repo) pullRequest(ctx context.Context, branch, remote string, refresh b
 }
 
 // CacheHit parses a cache entry and reports its PR URL ("" for a cached "no
-// PR") when the entry matches sha and is younger than CacheTTL.
+// PR") when the entry matches sha and is younger than cacheTTL.
 func CacheHit(entry, sha string, now int64) (string, bool) {
 	f := strings.Fields(entry)
 	if len(f) != 3 || f[0] != sha {
 		return "", false
 	}
 	at, err := strconv.ParseInt(f[1], 10, 64)
-	if err != nil || now-at >= int64(CacheTTL/time.Second) {
+	if err != nil || now-at >= int64(cacheTTL/time.Second) {
 		return "", false
 	}
 	if f[2] == "-" {

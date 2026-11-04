@@ -52,6 +52,8 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
+// TestCacheHit owns the stored format, "<pushed-sha> <epoch> <url-or-dash>",
+// which the earlier zsh function also wrote: its entries must stay readable.
 func TestCacheHit(t *testing.T) {
 	const sha = "abc123"
 	now := int64(1_000_000)
@@ -95,8 +97,5 @@ func TestRefURL(t *testing.T) {
 		if got := r.RefURL(c.ref, c.f); got != c.want {
 			t.Errorf("RefURL(%q, %+v) = %q; want %q", c.ref, c.f, got, c.want)
 		}
-	}
-	if got := r.CompareURL("feat/x"); got != "https://github.com/acme/widget/compare/feat/x?expand=1" {
-		t.Errorf("CompareURL = %q", got)
 	}
 }

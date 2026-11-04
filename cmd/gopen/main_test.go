@@ -3,12 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +19,11 @@ import (
 // origin reached through remote.origin.pushurl while remote.origin.url keeps a
 // github.com shape, a stub gh and a stub browser on a PATH that holds no real
 // gh. Nothing reaches the network, the real gh, or a real browser.
+//
+// These tests own the CLI contract: exit codes, the one-line stdout, what is
+// opened, pushed, looked up, and cached. internal/resolve's tests own the pure
+// parsers (origin shapes, line suffixes, cache entries, URL formatting); a row
+// belongs there unless it needs a repository to fail.
 
 const base = "https://github.com/acme/widget"
 
@@ -59,7 +64,7 @@ func setup(t *testing.T) *fixture {
 	}
 	f.write("stub/gh", "#!/bin/sh\n"+
 		"printf '%s\\n' \"$*\" >> \""+f.stub+"/gh.log\"\n"+
-		"[ -f \""+f.stub+"/hang\" ] && sleep 5\n"+
+		"[ -f \""+f.stub+"/hang\" ] && { sleep 5 & echo $! > \""+f.stub+"/child.pid\"; wait; }\n"+
 		"[ -f \""+f.stub+"/fail\" ] && { echo 'gh: could not resolve host' >&2; exit 1; }\n"+
 		"[ -f \""+f.stub+"/pr\" ] && cat \""+f.stub+"/pr\"\n"+
 		"exit 0\n", 0o755)
@@ -201,6 +206,11 @@ func TestBranchTreeWithoutPR(t *testing.T) {
 	if c := strings.Fields(f.cache("feat/search")); len(c) != 3 || c[2] != "-" {
 		t.Fatalf("no-PR answer not cached: %q", c)
 	}
+	// The cached "no PR" is served, so a PR-less branch looks up once.
+	f.expect(0, base+"/tree/feat/search")
+	if n := len(f.lines("gh.log")); n != 1 {
+		t.Fatalf("cached no-PR answer ran gh again: %d calls", n)
+	}
 	// --tree skips the lookup even when a PR exists.
 	f.setPR(base + "/pull/7")
 	f.reset()
@@ -251,8 +261,10 @@ func TestPRCache(t *testing.T) {
 	f.setPR(base + "/pull/7")
 	f.expect(0, base+"/pull/7")
 
-	// A fresh hit makes no call, even though the answer has changed.
+	// A fresh hit makes no call, even though the answer has changed. The key
+	// is the pushed tip, so a local commit that is not pushed keeps the hit.
 	f.setPR(base + "/pull/8")
+	f.git(f.repo, "commit", "-q", "--allow-empty", "-m", "local")
 	f.expect(0, base+"/pull/7")
 	if n := len(f.lines("gh.log")); n != 1 {
 		t.Fatalf("cache hit ran gh: %d calls", n)
@@ -262,27 +274,12 @@ func TestPRCache(t *testing.T) {
 		t.Fatalf("--refresh: %d calls", n)
 	}
 
-	// An entry at the TTL is stale.
-	sha := f.git(f.repo, "rev-parse", "refs/remotes/origin/feat/search")
-	old := time.Now().Add(-resolve.CacheTTL).Unix()
-	f.git(f.repo, "config", "branch.feat/search.gopen-pr", fmt.Sprintf("%s %d %s/pull/1", sha, old, base))
+	// Pushing moves the key, so the next call re-checks at once. (The TTL
+	// and the stored format, which the zsh function also wrote, are
+	// TestCacheHit's.)
 	f.setPR(base + "/pull/10")
-	f.expect(0, base+"/pull/10")
-
-	// A new push moves the key sha, so the cached answer is not served.
-	f.git(f.repo, "config", "branch.feat/search.gopen-pr", fmt.Sprintf("%s %d %s/pull/1", sha, time.Now().Unix(), base))
-	f.expect(0, base+"/pull/1")
-	f.git(f.repo, "commit", "-q", "--allow-empty", "-m", "more")
 	f.git(f.repo, "push", "-q")
 	f.expect(0, base+"/pull/10")
-
-	// An entry the zsh function wrote is read the same way.
-	newSHA := f.git(f.repo, "rev-parse", "refs/remotes/origin/feat/search")
-	if c := strings.Fields(f.cache("feat/search")); len(c) != 3 || c[0] != newSHA {
-		t.Fatalf("cache: %q", c)
-	}
-	f.git(f.repo, "config", "branch.feat/search.gopen-pr", newSHA+" "+strconv.FormatInt(time.Now().Unix(), 10)+" -")
-	f.expect(0, base+"/tree/feat/search")
 }
 
 func TestPRLookupFailureFallsBackUncached(t *testing.T) {
@@ -297,7 +294,10 @@ func TestPRLookupFailureFallsBackUncached(t *testing.T) {
 	f.setPR(base + "/pull/7")
 	f.expect(0, base+"/pull/7")
 
-	// A hanging gh is bounded, and its children with it.
+	// A hanging gh is bounded, and its children with it: the stub's own child
+	// must be gone too. Deleting the process-group kill in runBounded fails
+	// this; the elapsed bound alone cannot see it, since WaitDelay ends the
+	// wait while the orphan lives on.
 	f.flag("hang", true)
 	defer func(d time.Duration) { resolve.DefaultPRTimeout = d }(resolve.DefaultPRTimeout)
 	resolve.DefaultPRTimeout = 300 * time.Millisecond
@@ -305,6 +305,15 @@ func TestPRLookupFailureFallsBackUncached(t *testing.T) {
 	f.expect(0, base+"/tree/feat/search", "--refresh")
 	if elapsed := time.Since(start); elapsed > 3*time.Second || !strings.Contains(f.stderr.String(), "timed out") {
 		t.Fatalf("hang: %s %q", elapsed, f.stderr.String())
+	}
+	pid, err := strconv.Atoi(strings.Join(f.lines("child.pid"), ""))
+	if err != nil {
+		t.Fatalf("stub child pid: %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); syscall.Kill(pid, 0) == nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("gh's child %d outlived the deadline", pid)
+		}
 	}
 }
 
@@ -344,19 +353,24 @@ func TestNotOnOrigin(t *testing.T) {
 	// together still never push.
 	for _, args := range [][]string{nil, {"--print"}, {"-n", "-y"}} {
 		f.expect(3, "", args...)
-		if !strings.Contains(f.stderr.String(), "'feat/local' is not on origin") {
-			t.Fatalf("stderr: %q", f.stderr.String())
+		// The refusal names the branch and the way out.
+		if s := f.stderr.String(); !strings.Contains(s, "feat/local") || !strings.Contains(s, "gopen -y") {
+			t.Fatalf("stderr: %q", s)
 		}
 	}
 	if f.lines("browser.log") != nil || f.lines("gh.log") != nil || onOrigin() {
 		t.Fatal("exit 3 must not open, look up, or push")
 	}
 
-	// A terminal asks; declining opens the repository home without pushing.
-	f.interactive, f.stdin = true, "n\n"
-	f.expect(0, base)
-	if !strings.Contains(f.stderr.String(), "Push and open a PR? [y/N]") || onOrigin() {
-		t.Fatalf("decline: %q", f.stderr.String())
+	// A terminal asks, defaulting to no: anything but yes, a bare Enter and
+	// EOF included, opens the repository home without pushing.
+	f.interactive = true
+	for _, reply := range []string{"n\n", "\n", ""} {
+		f.stdin = reply
+		f.expect(0, base)
+		if !strings.Contains(f.stderr.String(), "[y/N]") || onOrigin() {
+			t.Fatalf("reply %q: %q", reply, f.stderr.String())
+		}
 	}
 
 	// Accepting pushes -u and opens the PR-create page.
@@ -401,7 +415,7 @@ func TestYesPushesWithoutTerminal(t *testing.T) {
 	f.git(f.repo, "config", "--add", "repo.pushArgs", "--no-verify")
 	f.git(f.repo, "config", "--add", "repo.pushArgs", "--no-signed")
 	f.expect(0, base+"/compare/feat/hooked?expand=1", "-y")
-	if !strings.Contains(f.stderr.String(), "git push --no-verify --no-signed (repo.pushArgs)") {
+	if s := f.stderr.String(); !strings.Contains(s, "--no-verify --no-signed") || !strings.Contains(s, "repo.pushArgs") {
 		t.Fatalf("stderr: %q", f.stderr.String())
 	}
 	f.git(f.repo, "config", "--unset-all", "repo.pushArgs")
@@ -421,8 +435,6 @@ func TestPathAndLine(t *testing.T) {
 	f.pushed("feat/search")
 	f.setPR(base + "/pull/7")
 	f.expect(0, base+"/blob/feat/search/src/app/main.go#L42", "-n", "src/app/main.go:42")
-	f.expect(0, base+"/blob/feat/search/src/app/main.go#L3-L9", "-n", "src/app/main.go:3-9")
-	f.expect(0, base+"/blob/feat/search/README.md", "-n", "README.md")
 	f.expect(0, base+"/tree/feat/search/src", "-n", "src")
 	f.expect(0, base+"/tree/feat/search", "-n", ".")
 	f.expect(0, base+"/blob/feat/search/src/app/main.go#L1", "-n", filepath.Join(f.repo, "src/app/main.go:1"))
@@ -441,7 +453,15 @@ func TestPathAndLine(t *testing.T) {
 	}
 	f.expect(0, base+"/blob/feat/search/README.md", "-n", filepath.Join(link, "README.md"))
 
-	for _, arg := range []string{"../../../outside", "missing.go", "/etc/hosts", "../app:3", "main.go:0", "main.go:9-2"} {
+	// Usage errors. The outside paths exist, so only the outside check can
+	// refuse them; a bad line spec stands for every SplitLines error.
+	for _, arg := range []string{
+		"../../../origin.git", // relative, outside
+		"/etc/hosts",          // absolute, outside
+		"missing.go",
+		"../app:3", // a line on a directory
+		"main.go:0",
+	} {
 		f.expect(2, "", "-n", arg)
 	}
 
@@ -449,22 +469,12 @@ func TestPathAndLine(t *testing.T) {
 	t.Chdir(f.repo)
 	f.git(f.repo, "switch", "-q", "--detach")
 	short := f.git(f.repo, "rev-parse", "--short", "HEAD")
-	f.expect(0, base+"/blob/"+short+"/src/app/main.go#L5", "src/app/main.go:5")
-	if got := f.lines("browser.log"); len(got) != 1 {
-		t.Fatalf("browser: %q", got)
-	}
+	f.expect(0, base+"/blob/"+short+"/src/app/main.go#L5", "-n", "src/app/main.go:5")
 }
 
-func TestOriginShapes(t *testing.T) {
+// Accepted origin shapes are TestBaseURL's; this owns the refusals' exit code.
+func TestNeedsGitHubOrigin(t *testing.T) {
 	f := setup(t)
-	for _, origin := range []string{
-		"git@github.com-personal:acme/widget.git",
-		"ssh://git@github.com/acme/widget.git",
-		"https://github.com/acme/widget.git",
-	} {
-		f.git(f.repo, "remote", "set-url", "origin", origin)
-		f.expect(0, base+"/tree/main", "-n")
-	}
 	f.git(f.repo, "remote", "set-url", "origin", "git@gitlab.com:acme/widget.git")
 	f.expect(1, "", "-n")
 	if !strings.Contains(f.stderr.String(), "not a github.com remote") {
