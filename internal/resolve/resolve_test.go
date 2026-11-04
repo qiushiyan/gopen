@@ -18,9 +18,9 @@ func TestBaseURL(t *testing.T) {
 		"https://github.com/acme/widget/tree/x":   "",
 		"/srv/git/widget.git":                     "",
 	} {
-		got, ok := BaseURL(remote)
+		got, ok := baseURL(remote)
 		if got != want || ok != (want != "") {
-			t.Errorf("BaseURL(%q) = %q, %v; want %q", remote, got, ok, want)
+			t.Errorf("baseURL(%q) = %q, %v; want %q", remote, got, ok, want)
 		}
 	}
 }
@@ -45,9 +45,9 @@ func TestSplitLines(t *testing.T) {
 		"/abs/x.go:3-3":  {"/abs/x.go", 3, 3, false},
 		"dir/sub/:12-13": {"dir/sub/", 12, 13, false},
 	} {
-		p, s, e, err := SplitLines(arg)
+		p, s, e, err := splitLines(arg)
 		if p != w.path || s != w.start || e != w.end || (err != nil) != w.err {
-			t.Errorf("SplitLines(%q) = %q %d %d %v; want %+v", arg, p, s, e, err, w)
+			t.Errorf("splitLines(%q) = %q %d %d %v; want %+v", arg, p, s, e, err, w)
 		}
 	}
 }
@@ -71,9 +71,9 @@ func TestCacheHit(t *testing.T) {
 		{"", "", false},
 	}
 	for _, c := range cases {
-		url, hit := CacheHit(c.entry, sha, now)
+		url, hit := cacheHit(c.entry, sha, now)
 		if url != c.url || hit != c.hit {
-			t.Errorf("CacheHit(%q) = %q %v; want %q %v", c.entry, url, hit, c.url, c.hit)
+			t.Errorf("cacheHit(%q) = %q %v; want %q %v", c.entry, url, hit, c.url, c.hit)
 		}
 	}
 }

@@ -26,16 +26,17 @@ import (
 // can never notice it; the TTL bounds how stale such an answer can get.
 const cacheTTL = 600 * time.Second
 
-// DefaultPRTimeout bounds the gh lookup in repositories returned by Open.
-var DefaultPRTimeout = 10 * time.Second
+// PRTimeout bounds the gh lookup, the only network call. A variable so tests
+// can shorten it.
+var PRTimeout = 10 * time.Second
 
 // Repo is a checkout whose origin is on github.com.
 type Repo struct {
 	Dir  string // directory Git and gh run in (the caller's working directory)
 	Base string // https://github.com/<owner>/<repo>
 
-	Now       func() time.Time
-	PRTimeout time.Duration // bound on the gh lookup, the only network call
+	top    string // the work tree's root
+	prefix string // Dir below top: "" or "sub/dir/"
 }
 
 // Request selects what to point at.
@@ -65,27 +66,31 @@ type Target struct {
 
 // Open checks that dir is inside a work tree whose origin is on github.com.
 func Open(ctx context.Context, dir string) (*Repo, error) {
-	if out, err := git(ctx, dir, "rev-parse", "--is-inside-work-tree"); err != nil || out != "true" {
+	// --show-toplevel fails outside a work tree: in no repository, in .git, or
+	// in a bare one.
+	loc, err := git(ctx, dir, "rev-parse", "--show-toplevel", "--show-prefix")
+	if err != nil {
 		return nil, errors.New("not in a git repository")
 	}
+	top, prefix, _ := strings.Cut(loc, "\n")
 	origin, err := git(ctx, dir, "remote", "get-url", "origin")
 	if err != nil {
 		return nil, errors.New("no 'origin' remote")
 	}
-	base, ok := BaseURL(origin)
+	base, ok := baseURL(origin)
 	if !ok {
 		return nil, fmt.Errorf("origin is not a github.com remote (%s)", origin)
 	}
-	return &Repo{Dir: dir, Base: base, Now: time.Now, PRTimeout: DefaultPRTimeout}, nil
+	return &Repo{Dir: dir, Base: base, top: top, prefix: prefix}, nil
 }
 
 // sshShorthand matches git@github.com: and host aliases such as
 // git@github.com-personal:, which route SSH keys through ~/.ssh/config.
 var sshShorthand = regexp.MustCompile(`^git@github\.com(-[A-Za-z0-9_-]+)?:`)
 
-// BaseURL rewrites an origin URL to https://github.com/<owner>/<repo>.
+// baseURL rewrites an origin URL to https://github.com/<owner>/<repo>.
 // It reports false for anything that is not a github.com repository.
-func BaseURL(remote string) (string, bool) {
+func baseURL(remote string) (string, bool) {
 	u := strings.TrimSpace(remote)
 	u = sshShorthand.ReplaceAllLiteralString(u, "https://github.com/")
 	if rest, ok := strings.CutPrefix(u, "ssh://git@github.com/"); ok {
@@ -126,7 +131,11 @@ func (r *Repo) Resolve(ctx context.Context, req Request) (Target, error) {
 	}
 	t := Target{Branch: branch}
 	if req.File == nil && !req.Tree && branch != r.defaultBranch(ctx, branch) {
-		t.URL, t.Warning = r.pullRequest(ctx, branch, tip, req.Refresh)
+		pr, err := r.pullRequest(ctx, branch, tip, req.Refresh)
+		if err != nil {
+			t.Warning = "PR lookup failed (" + err.Error() + "); using the branch tree"
+		}
+		t.URL = pr
 	}
 	if t.URL == "" {
 		t.URL = r.RefURL(branch, req.File)
@@ -149,36 +158,36 @@ func (r *Repo) defaultBranch(ctx context.Context, branch string) string {
 // missing. The answer is cached in branch.<name>.gopen-pr as
 // "<pushed-sha> <epoch> <url-or-dash>", keyed on tip, the pushed sha: a new
 // push forces a re-check, the TTL bounds staleness, and "no PR" is cached too.
-// A failed lookup is reported and not cached.
-func (r *Repo) pullRequest(ctx context.Context, branch, tip string, refresh bool) (string, string) {
+// A failed lookup is returned and not cached.
+func (r *Repo) pullRequest(ctx context.Context, branch, tip string, refresh bool) (string, error) {
 	gh, err := exec.LookPath("gh")
 	if err != nil {
-		return "", ""
+		return "", nil // without gh there is no PR to find, and nothing to warn about
 	}
-	now := r.Now().Unix()
+	now := time.Now().Unix()
 	key := "branch." + branch + ".gopen-pr"
 	if !refresh {
 		if entry, err := git(ctx, r.Dir, "config", "--get", key); err == nil {
-			if pr, ok := CacheHit(entry, tip, now); ok {
-				return pr, ""
+			if pr, ok := cacheHit(entry, tip, now); ok {
+				return pr, nil
 			}
 		}
 	}
 	pr, err := r.lookupPR(ctx, gh, branch)
 	if err != nil {
-		return "", "PR lookup failed (" + err.Error() + "); using the branch tree"
+		return "", err
 	}
 	value := pr
 	if value == "" {
 		value = "-"
 	}
 	_, _ = git(ctx, r.Dir, "config", key, fmt.Sprintf("%s %d %s", tip, now, value))
-	return pr, ""
+	return pr, nil
 }
 
-// CacheHit parses a cache entry and reports its PR URL ("" for a cached "no
+// cacheHit parses a cache entry and reports its PR URL ("" for a cached "no
 // PR") when the entry matches sha and is younger than cacheTTL.
-func CacheHit(entry, sha string, now int64) (string, bool) {
+func cacheHit(entry, sha string, now int64) (string, bool) {
 	f := strings.Fields(entry)
 	if len(f) != 3 || f[0] != sha {
 		return "", false
@@ -197,19 +206,18 @@ func CacheHit(entry, sha string, now int64) (string, bool) {
 // Open PRs only: `gh pr view <branch>` also returns closed and merged ones,
 // exactly the stale link to avoid.
 func (r *Repo) lookupPR(ctx context.Context, gh, branch string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, r.PRTimeout)
+	ctx, cancel := context.WithTimeout(ctx, PRTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, gh, "pr", "list", "--head", branch, "--state", "open",
 		"--limit", "1", "--json", "url", "--jq", ".[0].url // empty")
 	out, err := runBounded(cmd, r.Dir)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("gh timed out after %s", r.PRTimeout)
+			return "", fmt.Errorf("gh timed out after %s", PRTimeout)
 		}
 		return "", err
 	}
-	pr, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
-	return pr, nil
+	return strings.TrimSpace(out), nil
 }
 
 // RefURL points at ref itself (its tree) or at a file or directory on it.
@@ -260,47 +268,48 @@ func (r *Repo) Push(ctx context.Context, branch string, stdin io.Reader, w io.Wr
 	return nil
 }
 
-// Locate resolves a path argument (relative to Dir, or absolute) to a File on
-// the repository. The path must exist in the working tree and lie inside it.
-func (r *Repo) Locate(ctx context.Context, arg string) (*File, error) {
-	top, err := git(ctx, r.Dir, "rev-parse", "--show-toplevel")
+// Locate resolves a path argument, relative to Dir or absolute, with an
+// optional :n or :n-m line suffix, to a File on the repository. The path must
+// exist in the working tree and lie inside it, and a line needs a file. Every
+// error is the caller's usage error.
+func (r *Repo) Locate(arg string) (*File, error) {
+	p, start, end, err := splitLines(arg)
 	if err != nil {
 		return nil, err
 	}
 	var rel string
-	if filepath.IsAbs(arg) {
-		realTop, err := filepath.EvalSymlinks(top)
+	if filepath.IsAbs(p) {
+		realTop, err := filepath.EvalSymlinks(r.top)
 		if err != nil {
 			return nil, err
 		}
-		if rel, err = filepath.Rel(realTop, evalExisting(arg)); err != nil {
+		if rel, err = filepath.Rel(realTop, evalExisting(p)); err != nil {
 			return nil, err
 		}
 	} else {
 		// Git computes the prefix from the physical directory, so symlinked
 		// directories above the checkout do not matter.
-		prefix, err := git(ctx, r.Dir, "rev-parse", "--show-prefix")
-		if err != nil {
-			return nil, err
-		}
-		rel = filepath.Join(prefix, arg)
+		rel = filepath.Join(r.prefix, p)
 	}
 	if rel == ".." || strings.HasPrefix(rel, "../") {
-		return nil, fmt.Errorf("%s is outside the repository", arg)
+		return nil, fmt.Errorf("%s is outside the repository", p)
 	}
 	if rel == "." {
 		rel = ""
 	}
-	info, err := os.Stat(filepath.Join(top, rel))
+	info, err := os.Stat(filepath.Join(r.top, rel))
 	if err != nil {
-		return nil, fmt.Errorf("no such path in the working tree: %s", arg)
+		return nil, fmt.Errorf("no such path in the working tree: %s", p)
 	}
-	return &File{Path: filepath.ToSlash(rel), Dir: info.IsDir()}, nil
+	if info.IsDir() && start > 0 {
+		return nil, fmt.Errorf("%s is a directory; a line needs a file", p)
+	}
+	return &File{Path: filepath.ToSlash(rel), Dir: info.IsDir(), Start: start, End: end}, nil
 }
 
-// SplitLines separates a trailing :N or :N-M line suffix from a path argument.
+// splitLines separates a trailing :N or :N-M line suffix from a path argument.
 // A suffix that is not a line spec stays part of the path.
-func SplitLines(arg string) (path string, start, end int, err error) {
+func splitLines(arg string) (path string, start, end int, err error) {
 	path, spec, ok := strings.CutLast(arg, ":")
 	if !ok || !isLineSpec(spec) {
 		return arg, 0, 0, nil

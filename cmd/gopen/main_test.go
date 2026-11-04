@@ -307,8 +307,8 @@ func TestPRLookupFailureFallsBackUncached(t *testing.T) {
 	// this; the elapsed bound alone cannot see it, since WaitDelay ends the
 	// wait while the orphan lives on.
 	f.flag("hang", true)
-	defer func(d time.Duration) { resolve.DefaultPRTimeout = d }(resolve.DefaultPRTimeout)
-	resolve.DefaultPRTimeout = 300 * time.Millisecond
+	defer func(d time.Duration) { resolve.PRTimeout = d }(resolve.PRTimeout)
+	resolve.PRTimeout = 300 * time.Millisecond
 	start := time.Now()
 	f.expect(0, base+"/tree/feat/search", "--refresh")
 	if elapsed := time.Since(start); elapsed > 3*time.Second || !strings.Contains(f.stderr.String(), "timed out") {

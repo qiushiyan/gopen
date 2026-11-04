@@ -147,19 +147,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 
 	req := resolve.Request{Tree: o.tree, Refresh: o.refresh}
 	if o.path != "" {
-		p, start, end, err := resolve.SplitLines(o.path)
-		if err != nil {
+		if req.File, err = repo.Locate(o.path); err != nil {
 			return fail(exitUsage, "%v", err)
 		}
-		f, err := repo.Locate(ctx, p)
-		if err != nil {
-			return fail(exitUsage, "%v", err)
-		}
-		if f.Dir && start > 0 {
-			return fail(exitUsage, "%s is a directory; a line needs a file", p)
-		}
-		f.Start, f.End = start, end
-		req.File = f
 	}
 
 	t, err := repo.Resolve(ctx, req)
@@ -172,19 +162,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 
 	url := t.URL
 	if t.Unpushed {
-		push := o.yes
-		switch {
-		case o.print || (!o.yes && !interactive):
+		if o.print || (!o.yes && !interactive) {
 			return fail(exitUnpushed, "'%s' is not on origin; nothing on GitHub to open (gopen -y pushes it and opens the PR-create page)", t.Branch)
-		case !o.yes:
-			fmt.Fprintf(stderr, "gopen: '%s' isn't on origin. Push and open a PR? [y/N] ", t.Branch)
-			reply, _ := bufio.NewReader(stdin).ReadString('\n')
-			push = strings.HasPrefix(strings.ToLower(strings.TrimSpace(reply)), "y")
 		}
-		switch {
-		case !push:
-			url = repo.Base // declined: the repository's home page
-		default:
+		if o.yes || askPush(stdin, stderr, t.Branch) {
 			if err := repo.Push(ctx, t.Branch, stdin, stderr); err != nil {
 				return fail(exitFail, "push failed: %v", err)
 			}
@@ -192,6 +173,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 			if req.File != nil {
 				url = repo.RefURL(t.Branch, req.File)
 			}
+		} else {
+			url = repo.Base // declined: the repository's home page
 		}
 	}
 
@@ -203,6 +186,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, interactive bool, 
 		return fail(exitFail, "%v; URL: %s", err, url)
 	}
 	return exitOK
+}
+
+// askPush asks on stderr whether to push branch and reads one line of stdin;
+// only a yes pushes.
+func askPush(stdin io.Reader, stderr io.Writer, branch string) bool {
+	fmt.Fprintf(stderr, "gopen: '%s' isn't on origin. Push and open a PR? [y/N] ", branch)
+	reply, _ := bufio.NewReader(stdin).ReadString('\n')
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(reply)), "y")
 }
 
 // openBrowser hands url to $GOPEN_BROWSER, else $BROWSER, else the platform
