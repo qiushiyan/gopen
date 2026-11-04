@@ -106,6 +106,11 @@ func BaseURL(remote string) (string, bool) {
 // Resolve applies the resolution order: detached HEAD -> the commit; a branch
 // on origin -> its open PR (unless Tree, File, or the default branch), else its
 // tree; a branch not on origin -> Unpushed.
+//
+// "On origin" means refs/remotes/origin/<branch> exists: the ref `git push`
+// updates under push.default=current, and Git's @{push} under it. The
+// upstream is not consulted. A branch started from origin/main tracks main,
+// and a renamed branch tracks its old name; neither is where its commits go.
 func (r *Repo) Resolve(ctx context.Context, req Request) (Target, error) {
 	branch, _ := git(ctx, r.Dir, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if branch == "" {
@@ -115,39 +120,18 @@ func (r *Repo) Resolve(ctx context.Context, req Request) (Target, error) {
 		}
 		return Target{URL: r.RefURL(sha, req.File)}, nil
 	}
-	remote := r.remoteBranch(ctx, branch)
-	if remote == "" {
+	tip, err := git(ctx, r.Dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	if err != nil {
 		return Target{Branch: branch, Unpushed: true}, nil
 	}
 	t := Target{Branch: branch}
 	if req.File == nil && !req.Tree && branch != r.defaultBranch(ctx, branch) {
-		t.URL, t.Warning = r.pullRequest(ctx, branch, remote, req.Refresh)
+		t.URL, t.Warning = r.pullRequest(ctx, branch, tip, req.Refresh)
 	}
 	if t.URL == "" {
-		t.URL = r.RefURL(remote, req.File)
+		t.URL = r.RefURL(branch, req.File)
 	}
 	return t, nil
-}
-
-// remoteBranch names the branch's counterpart on the remote, or "" when there
-// is none. Both checks are local refs, so this costs no network call. A
-// same-named origin/<branch> wins over the upstream's name: that is what `git
-// push` targets under push.default=current, and a renamed branch keeps its old
-// upstream, which would point at the old remote branch and its old PR.
-func (r *Repo) remoteBranch(ctx context.Context, branch string) string {
-	if _, err := git(ctx, r.Dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); err == nil {
-		return branch
-	}
-	up, err := git(ctx, r.Dir, "rev-parse", "--symbolic-full-name", "@{upstream}")
-	if err != nil {
-		return ""
-	}
-	rest, ok := strings.CutPrefix(up, "refs/remotes/")
-	if !ok {
-		return "" // a local upstream is not on any remote
-	}
-	_, name, _ := strings.Cut(rest, "/")
-	return name
 }
 
 // defaultBranch reads origin/HEAD locally; without it, main and master count as
@@ -163,28 +147,24 @@ func (r *Repo) defaultBranch(ctx context.Context, branch string) string {
 
 // pullRequest returns the branch's open PR URL, or "" when it has none or gh is
 // missing. The answer is cached in branch.<name>.gopen-pr as
-// "<pushed-sha> <epoch> <url-or-dash>": a new push changes the sha and forces a
-// re-check, the TTL bounds staleness, and "no PR" is cached too. A failed
-// lookup is reported and not cached.
-func (r *Repo) pullRequest(ctx context.Context, branch, remote string, refresh bool) (string, string) {
+// "<pushed-sha> <epoch> <url-or-dash>", keyed on tip, the pushed sha: a new
+// push forces a re-check, the TTL bounds staleness, and "no PR" is cached too.
+// A failed lookup is reported and not cached.
+func (r *Repo) pullRequest(ctx context.Context, branch, tip string, refresh bool) (string, string) {
 	gh, err := exec.LookPath("gh")
 	if err != nil {
 		return "", ""
 	}
 	now := r.Now().Unix()
-	sha, err := git(ctx, r.Dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+remote)
-	if err != nil || sha == "" {
-		sha, _ = git(ctx, r.Dir, "rev-parse", "HEAD")
-	}
 	key := "branch." + branch + ".gopen-pr"
 	if !refresh {
 		if entry, err := git(ctx, r.Dir, "config", "--get", key); err == nil {
-			if pr, ok := CacheHit(entry, sha, now); ok {
+			if pr, ok := CacheHit(entry, tip, now); ok {
 				return pr, ""
 			}
 		}
 	}
-	pr, err := r.lookupPR(ctx, gh, remote)
+	pr, err := r.lookupPR(ctx, gh, branch)
 	if err != nil {
 		return "", "PR lookup failed (" + err.Error() + "); using the branch tree"
 	}
@@ -192,7 +172,7 @@ func (r *Repo) pullRequest(ctx context.Context, branch, remote string, refresh b
 	if value == "" {
 		value = "-"
 	}
-	_, _ = git(ctx, r.Dir, "config", key, fmt.Sprintf("%s %d %s", sha, now, value))
+	_, _ = git(ctx, r.Dir, "config", key, fmt.Sprintf("%s %d %s", tip, now, value))
 	return pr, ""
 }
 
@@ -213,13 +193,13 @@ func CacheHit(entry, sha string, now int64) (string, bool) {
 	return f[2], true
 }
 
-// lookupPR asks gh for the newest open PR whose head is the remote branch.
+// lookupPR asks gh for the newest open PR whose head is branch.
 // Open PRs only: `gh pr view <branch>` also returns closed and merged ones,
 // exactly the stale link to avoid.
-func (r *Repo) lookupPR(ctx context.Context, gh, remote string) (string, error) {
+func (r *Repo) lookupPR(ctx context.Context, gh, branch string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.PRTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, gh, "pr", "list", "--head", remote, "--state", "open",
+	cmd := exec.CommandContext(ctx, gh, "pr", "list", "--head", branch, "--state", "open",
 		"--limit", "1", "--json", "url", "--jq", ".[0].url // empty")
 	out, err := runBounded(cmd, r.Dir)
 	if err != nil {

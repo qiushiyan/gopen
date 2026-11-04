@@ -229,17 +229,25 @@ func TestDefaultBranchSkipsLookup(t *testing.T) {
 	}
 }
 
-func TestRenamedBranchFollowsUpstream(t *testing.T) {
+// An upstream with another name is not the branch's place on origin: git push
+// (push.default=current) would create origin/<branch>. Following the upstream
+// opened the base's tree, or its PR, for a branch GitHub has never seen.
+func TestUpstreamIsNotOrigin(t *testing.T) {
 	f := setup(t)
 	f.pushed("feat/old")
-	f.git(f.repo, "branch", "-m", "feat/new") // keeps upstream origin/feat/old
 	f.setPR(base + "/pull/9")
-	f.expect(0, base+"/pull/9")
-	if got := f.lines("gh.log"); len(got) != 1 || !strings.Contains(got[0], "--head feat/old ") {
-		t.Fatalf("gh: %q", got)
-	}
-	if f.cache("feat/new") == "" {
-		t.Fatal("cache belongs to the local branch name")
+	for _, c := range []struct {
+		name   string
+		create []string // leaves the new branch checked out
+	}{
+		{"renamed after a push", []string{"branch", "-m", "feat/renamed"}},
+		{"started from origin/main", []string{"switch", "-qc", "feat/fresh", "origin/main"}},
+	} {
+		f.git(f.repo, c.create...)
+		f.expect(3, "", "-n")
+		if got := f.lines("gh.log"); got != nil {
+			t.Fatalf("%s: looked up %q", c.name, got)
+		}
 	}
 }
 
