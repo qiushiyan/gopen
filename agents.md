@@ -7,8 +7,10 @@ proportional to demonstrated failures or requested features, and the code free
 of third-party dependencies.
 
 - Contract changes cross repos: stdout (one URL), the exit codes, and the flags
-  are consumed by `~/dotfiles/tmux/.config/tmux/scripts/tmux-gopen.sh`
-  (prefix g) and the `_gopen` completion in `~/dotfiles/zsh/.config/zsh/git.zsh`.
+  are consumed by tmux's prefix g
+  (`~/dotfiles/tmux/.config/tmux/scripts/tmux-gopen.sh`), Rex's prefix g (the
+  `gopen` action in `~/dotfiles/rex/.config/rex/lua/lab/tools.lua`), and the
+  `_gopen` completion in `~/dotfiles/zsh/.config/zsh/git.zsh`.
   The cache key `branch.<name>.gopen-pr` and its three-field value must stay
   readable for entries already in users' repositories.
 - Tests need temporary homes, Git config, and repositories, a stub `gh` on a

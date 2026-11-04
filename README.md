@@ -34,13 +34,13 @@ its own branch.
 | branch on origin | the branch's tree, `/tree/<branch>` |
 | branch not on origin | exit 3, or push and open `/compare/<branch>?expand=1` |
 
-The deciding question is whether GitHub knows the ref, not whether the branch
-tracks something, and it is answered from local refs without a network call:
-a same-named `refs/remotes/origin/<branch>` first, then the branch's upstream
-(a remote-tracking ref). Same-name wins because that is what `git push`
-targets under `push.default=current`, and a renamed branch keeps its old
-upstream, which would point at the old remote branch and its old PR. Refs are
-only as fresh as the last fetch or push.
+The deciding question is whether GitHub knows the branch, answered from local
+refs without a network call: `refs/remotes/origin/<branch>` must exist. That
+is the ref `git push` creates under `push.default=current`, and Git's
+`@{push}` there. The upstream does not count: a branch started from
+`origin/main` tracks `main`, and a renamed branch tracks its old name, yet
+neither is where its commits go, so each is not on origin until pushed. Refs
+are only as fresh as the last fetch or push.
 
 The origin URL becomes `https://github.com/<owner>/<repo>`. SSH shorthand
 (`git@github.com:`), host aliases used for SSH key routing
@@ -49,12 +49,12 @@ accepted, with any `.git` or trailing slash removed. Any other host exits 1.
 
 ## The PR lookup and its cache
 
-The PR lookup is the one network call: `gh pr list --head <remote-branch>
---state open --limit 1`, run in the checkout, bounded at 10 seconds. Open PRs
-only, because `gh pr view <branch>` also returns closed and merged PRs, the
-stale link to avoid. It is skipped on the default branch (read from the local
-`origin/HEAD`, or `main`/`master` without one), with `--tree`, with a path
-argument, and when `gh` is not on PATH.
+The PR lookup is the one network call: `gh pr list --head <branch> --state open
+--limit 1`, run in the checkout, bounded at 10 seconds. Open PRs only, because
+`gh pr view <branch>` also returns closed and merged PRs, the stale link to
+avoid. It is skipped on the default branch (read from the local `origin/HEAD`,
+or `main`/`master` without one), with `--tree`, with a path argument, and when
+`gh` is not on PATH.
 
 The answer is cached in the repository's Git config:
 
@@ -62,20 +62,20 @@ The answer is cached in the repository's Git config:
 branch.<local-branch>.gopen-pr = "<pushed-sha> <epoch-seconds> <pr-url-or-dash>"
 ```
 
-A hit needs the pushed tip (`origin/<remote-branch>`, else HEAD) to still match
-and the entry to be younger than 10 minutes. Pushing new commits therefore
-re-checks at once. A PR closed, merged, or opened without a push changes
-nothing in Git, so the TTL bounds how long such a change goes unnoticed;
-`--refresh` skips the cached answer. "No PR" is cached as `-`, so a PR-less
-branch stays instant. A failed or timed-out lookup warns on stderr, is not
-cached, and falls back to the branch's tree. The key and format are the ones
-the earlier zsh `gopen` function wrote, so its entries remain valid.
+A hit needs the pushed tip, `origin/<branch>`, to still match and the entry to
+be younger than 10 minutes. Pushing new commits therefore re-checks at once. A
+PR closed, merged, or opened without a push changes nothing in Git, so the TTL
+bounds how long such a change goes unnoticed; `--refresh` skips the cached
+answer. "No PR" is cached as `-`, so a PR-less branch stays instant. A failed
+or timed-out lookup warns on stderr, is not cached, and falls back to the
+branch's tree. The key and format are the ones the earlier zsh `gopen` function
+wrote, so its entries remain valid.
 
 ## Paths and lines
 
 A path argument opens that file or directory on the resolved ref instead of
 the PR: `/blob/<ref>/<path>` for a file, `/tree/<ref>/<path>` for a directory.
-The ref is the remote branch, or the short commit sha when detached. A `:n` or
+The ref is the branch, or the short commit sha when detached. A `:n` or
 `:n-m` suffix adds `#Ln` or `#Ln-Lm`; for files GitHub renders (Markdown,
 notebooks, CSV, SVG, and similar) it also adds `?plain=1`, without which line
 anchors do nothing. Relative paths start from the current directory; absolute
@@ -129,6 +129,11 @@ command line. Tests set `GOPEN_BROWSER` to a recording stub.
   from `/dev/null`, shows the URL with `display-message`, and on exit 3 asks
   through `confirm-before` before calling `gopen -y`. The URL on stdout and exit
   code 3 are the contract it relies on.
+- **Rex `prefix g`**, the `gopen` action in
+  `~/dotfiles/rex/.config/rex/lua/lab/tools.lua`, relies on the same two: it
+  runs `gopen </dev/null` in the block's directory and toasts by exit code, or
+  `gopen --print </dev/null` when the URL must reach another machine, which
+  Rex then opens or copies there.
 - **zsh** keeps only the `_gopen` completion in
   `~/dotfiles/zsh/.config/zsh/git.zsh`; the flags it completes follow `--help`.
 - **Editors and agents** use `gopen -n [path[:line]]` and read one URL from
